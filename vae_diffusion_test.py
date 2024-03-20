@@ -72,9 +72,8 @@ class VAE(nn.Module):
     def decode(self, z, style):
         decoded = self.decoder(z)
         batch_size, channels, height, width = decoded.size()
-        style = style.view(batch_size, style_dim, 1, 1)
+        style = style.view(batch_size, -1, 1, 1)
         style = style.repeat(1, 1, height, width)
-        style = style.repeat(1, channels, 1, 1)  # Repeat along the channel dimension
         decoded = decoded + style
         return decoded
 
