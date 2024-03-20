@@ -112,23 +112,19 @@ class DiffusionModel(nn.Module):
         return torch.linspace(1e-4, 0.02, self.num_steps)
 
     def forward(self, z, t):
-        # Move t to the same device as self.alpha_bars
-        t = t.to(self.alpha_bars.device)
+        t = t.to(self.alpha_bars.device) # Move t to the same device as self.alpha_bars
         alpha_bar = self.alpha_bars[t]
-
-        # Move alpha_bar to the same device as z
-        alpha_bar = alpha_bar.to(z.device)
+        alpha_bar = alpha_bar.to(z.device) # Move alpha_bar to the same device as z
         sqrt_alpha_bar = torch.sqrt(alpha_bar).unsqueeze(-1).unsqueeze(-1)
         sqrt_one_minus_alpha_bar = torch.sqrt(1 - alpha_bar).unsqueeze(-1).unsqueeze(-1).to(z.device)
 
-        # Generate noise on the same device as z
-        noise = torch.randn_like(z)
+        noise = torch.randn_like(z) # Generate noise on the same device as z
 
         noisy_z = sqrt_alpha_bar * z + sqrt_one_minus_alpha_bar * noise
         batch_size, _, _ = noisy_z.size()
-        noisy_z = noisy_z.view(batch_size, self.latent_dim + self.style_dim)  # Reshape the input tensor
+        noisy_z = noisy_z.view(batch_size, self.latent_dim + self.style_dim)
         denoised_z = self.denoise_fn(noisy_z)
-        denoised_z = denoised_z.view(batch_size, self.latent_dim, self.style_dim)  # Reshape the output tensor
+        denoised_z = denoised_z.view(batch_size, self.latent_dim, self.style_dim)
         return denoised_z, noise
 
 # Load and preprocess the dataset
@@ -180,7 +176,7 @@ class CustomFlickr30k(Dataset):
 if __name__ == '__main__':
     print("Loading dataset...")
     dataset = CustomFlickr30k(root='flickr30k_images/flickr30k_images', ann_file='flickr30k_images/results.csv', transform=transform)
-    subset_indices = list(range(0, len(dataset), 50))  # Use every 10th sample
+    subset_indices = list(range(0, len(dataset), 50))  # Use every Nth sample
     subset_dataset = torch.utils.data.Subset(dataset, subset_indices)
     dataloader = DataLoader(subset_dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
 
