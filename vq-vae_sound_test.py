@@ -175,8 +175,9 @@ data_path = "26_29_09_2017_KCL\\26-29_09_2017_KCL"
 spectrograms = load_data(data_path)
 
 # Plot an example spectrogram
-example_spectrogram, _ = spectrograms[0]
-plot_spectrogram(example_spectrogram)
+for i in range(10):
+    example_spectrogram, _ = spectrograms[i]
+    plot_spectrogram(example_spectrogram)
 
 dataloader = torch.utils.data.DataLoader(spectrograms, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
