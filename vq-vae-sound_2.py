@@ -25,35 +25,35 @@ def plot_spectrogram(spectrogram):
     fig.update_layout(title='Mel Spectrogram', xaxis_title='Time', yaxis_title='Mel Frequency')
     fig.show()
 
-# VAE Encoder
+# VAE Encoder (using RNN)
 class Encoder(nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim):
         super(Encoder, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.rnn = nn.GRU(input_dim, hidden_dim, batch_first=True)  # Use GRU or LSTM
         self.fc_mu = nn.Linear(hidden_dim, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
-        
+
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        mu = self.fc_mu(x)
-        log_var = self.fc_logvar(x)
+        _, hidden = self.rnn(x)  # Get the last hidden state
+        hidden = hidden.squeeze(0)  # Remove the sequence dimension
+        mu = self.fc_mu(hidden)
+        log_var = self.fc_logvar(hidden)
         return mu, log_var
 
-# VAE Decoder
+# VAE Decoder (using RNN)
 class Decoder(nn.Module):
     def __init__(self, latent_dim, hidden_dim, output_dim):
         super(Decoder, self).__init__()
-        self.fc1 = nn.Linear(latent_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, output_dim)
-        
+        self.fc = nn.Linear(latent_dim, hidden_dim)
+        self.rnn = nn.GRU(hidden_dim, hidden_dim, batch_first=True)  # Use GRU or LSTM
+        self.fc_out = nn.Linear(hidden_dim, output_dim)
+
     def forward(self, z):
-        z = F.relu(self.fc1(z))
-        z = F.relu(self.fc2(z))
-        x_recon = self.fc3(z)
-        return x_recon
+        hidden = self.fc(z)
+        hidden = hidden.unsqueeze(0)  # Add the sequence dimension
+        output, _ = self.rnn(hidden)  # Get the output sequence
+        output = self.fc_out(output.squeeze(1))  # Remove the sequence dimension
+        return output
 
 # VAE
 class VAE(nn.Module):
@@ -108,10 +108,10 @@ def inference(model, spectrogram):
         padded_spectrogram_flat = padded_spectrogram.reshape(padded_spectrogram.size(0), -1)
         print("Flattened padded spectrogram shape:", padded_spectrogram_flat.shape)
         
+        padded_spectrogram_flat = padded_spectrogram_flat.unsqueeze(1)  # Add sequence dimension
         reconstructed_spectrogram_flat, _, _ = model(padded_spectrogram_flat)
-        print("Reconstructed flattened spectrogram shape:", reconstructed_spectrogram_flat.shape)
-        
-        reconstructed_spectrogram = reconstructed_spectrogram_flat.reshape(padded_spectrogram.size(0), padded_spectrogram.size(1), padded_spectrogram.size(2))
+        reconstructed_spectrogram = reconstructed_spectrogram_flat.view(padded_spectrogram.size(0), padded_spectrogram.size(1), padded_spectrogram.size(2))
+
         print("Reconstructed spectrogram shape:", reconstructed_spectrogram.shape)
         
         # Remove the padding from the reconstructed spectrogram
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     # Hyperparameters
     num_epochs = 60
     batch_size = 20000
-    learning_rate = 1e-7
+    learning_rate = 4e-4
     latent_dim = 128
     hidden_dim = 256
 
