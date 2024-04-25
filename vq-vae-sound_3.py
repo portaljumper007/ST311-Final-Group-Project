@@ -7,7 +7,7 @@ import torchaudio.transforms as T
 import plotly.graph_objects as go
 import numpy as np
 
-N_MELS = 256
+N_MELS = 64
 MEL_N_FFT = 4096
 FIXED_SPECT_LENGTH = 512
 
@@ -25,44 +25,42 @@ def plot_spectrogram(spectrogram):
     fig.update_layout(title='Mel Spectrogram', xaxis_title='Time', yaxis_title='Mel Frequency')
     fig.show()
 
-# VAE Encoder (using Convolutional Layers)
+# VAE Encoder (using RNN)
 class Encoder(nn.Module):
-    def __init__(self, input_channels, hidden_dim, latent_dim):
+    def __init__(self, input_dim, hidden_dim, latent_dim):
         super(Encoder, self).__init__()
-        self.conv1 = nn.Conv2d(input_channels, hidden_dim, kernel_size=3, stride=2, padding=1)  # Convolutional layer 1
-        self.conv2 = nn.Conv2d(hidden_dim, hidden_dim*2, kernel_size=3, stride=2, padding=1)  # Convolutional layer 2
-        self.fc_mu = nn.Linear(hidden_dim*2 * (N_MELS // 4) * (FIXED_SPECT_LENGTH // 4), latent_dim)
-        self.fc_logvar = nn.Linear(hidden_dim*2 * (N_MELS // 4) * (FIXED_SPECT_LENGTH // 4), latent_dim)
+        self.rnn = nn.GRU(input_dim, hidden_dim, batch_first=True)  # Use GRU or LSTM
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
     def forward(self, x):
-        x = F.relu(self.conv1(x))  # Apply ReLU activation after convolution
-        x = F.relu(self.conv2(x))  # Apply ReLU activation after convolution
-        x = x.view(x.size(0), -1)  # Flatten the output of convolutional layers
-        mu = self.fc_mu(x)
-        log_var = self.fc_logvar(x)
+        _, hidden = self.rnn(x)  # Get the last hidden state
+        hidden = hidden.squeeze(0)  # Remove the sequence dimension
+        mu = self.fc_mu(hidden)
+        log_var = self.fc_logvar(hidden)
         return mu, log_var
 
-# VAE Decoder (using Transpose Convolutional Layers)
+# VAE Decoder (using RNN)
 class Decoder(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, output_channels):
+    def __init__(self, latent_dim, hidden_dim, output_dim):
         super(Decoder, self).__init__()
-        self.fc = nn.Linear(latent_dim, hidden_dim*2 * (N_MELS // 4) * (FIXED_SPECT_LENGTH // 4))
-        self.conv1 = nn.ConvTranspose2d(hidden_dim*2, hidden_dim, kernel_size=3, stride=2, padding=1, output_padding=1)  # Transpose convolutional layer 1
-        self.conv2 = nn.ConvTranspose2d(hidden_dim, output_channels, kernel_size=3, stride=2, padding=1, output_padding=1)  # Transpose convolutional layer 2
+        self.fc = nn.Linear(latent_dim, hidden_dim)
+        self.rnn = nn.GRU(hidden_dim, hidden_dim, batch_first=True)  # Use GRU or LSTM
+        self.fc_out = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, z):
-        x = self.fc(z)
-        x = x.view(x.size(0), -1, (N_MELS // 4), (FIXED_SPECT_LENGTH // 4))  # Reshape to 4D tensor
-        x = F.relu(self.conv1(x))  # Apply ReLU activation after transpose convolution
-        x = torch.sigmoid(self.conv2(x))  # Apply sigmoid activation to constrain output to [0, 1]
-        return x
+        hidden = self.fc(z)
+        hidden = hidden.unsqueeze(0)  # Add the sequence dimension
+        output, _ = self.rnn(hidden)  # Get the output sequence
+        output = self.fc_out(output.squeeze(1))  # Remove the sequence dimension
+        return output
 
 # VAE
 class VAE(nn.Module):
-    def __init__(self, input_channels, hidden_dim, latent_dim):
+    def __init__(self, input_dim, hidden_dim, latent_dim):
         super(VAE, self).__init__()
-        self.encoder = Encoder(input_channels, hidden_dim, latent_dim)
-        self.decoder = Decoder(latent_dim, hidden_dim, input_channels)  # Output channels same as input channels
+        self.encoder = Encoder(input_dim, hidden_dim, latent_dim)
+        self.decoder = Decoder(latent_dim, hidden_dim, input_dim)
 
     def forward(self, x):
         mu, log_var = self.encoder(x)
@@ -74,6 +72,8 @@ class VAE(nn.Module):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
         return mu + eps * std
+
+
 
 
 # Training loop
@@ -158,11 +158,11 @@ if __name__ == "__main__":
     print(device)
 
     # Hyperparameters
-    num_epochs = 300
+    num_epochs = 4000
     batch_size = 60000
-    learning_rate = 1e-4
-    latent_dim = 512
-    hidden_dim = 1024
+    learning_rate = 0.5e-4
+    latent_dim = 256
+    hidden_dim = 512
 
     # Create VAE model
     input_dim = N_MELS * FIXED_SPECT_LENGTH  # Adjust based on the fixed spectrogram size
