@@ -168,7 +168,7 @@ class ResidualBlock(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, input_channels, hidden_channels, latent_dim):
         super(Encoder, self).__init__()
-        self.conv1 = nn.Conv2d(input_channels, hidden_channels, kernel_size=5, stride=2, padding=2, groups=hidden_channels*1)
+        self.conv1 = nn.Conv2d(input_channels, hidden_channels, kernel_size=5, stride=2, padding=2) #First conv layer to map from input channels to hidden channels (on a new dimension)
         self.res_block1 = ResidualBlock(hidden_channels)
         self.conv2 = nn.Conv2d(hidden_channels, hidden_channels*2, kernel_size=5, stride=2, padding=2, groups=hidden_channels*1)
         self.res_block2 = ResidualBlock(hidden_channels*2)
@@ -356,7 +356,7 @@ def collate_fn(batch):
 def load_data(data_path, noise_ratio=0.6):
     spectrograms = []
     for root, dirs, files in os.walk(data_path):
-        for file in files[:2]:
+        for file in files[:8]:
             if file.endswith(".wav") and "ID30_pd_2_1_1.wav" not in file:
                 print(file)
                 audio_path = os.path.join(root, file)
@@ -395,11 +395,11 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 200
+    num_epochs = 500
     batch_size = 4096
     learning_rate = 2.5e-4
     latent_dim = 1024
-    hidden_channels = 8
+    hidden_channels = 4
 
     # Create VAE model
     input_channels = 1
@@ -442,8 +442,8 @@ if __name__ == "__main__":
     output_waveform *= waveform_std / output_waveform.std()  # Rescale the output waveform to match the input volume
     torchaudio.save("output_audio.wav", output_waveform, sample_rate)
 
-    input_waveform = spectrogram_to_waveform(input_spectrogram, sample_rate)
-    torchaudio.save("test_unaltered_input_pipeline_audio.wav", input_waveform, sample_rate)
+    #input_waveform = spectrogram_to_waveform(input_spectrogram, sample_rate)
+    #torchaudio.save("test_unaltered_input_pipeline_audio.wav", input_waveform, sample_rate)
 
     print("Done! File saved.")
 
