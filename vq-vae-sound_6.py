@@ -7,10 +7,10 @@ import torchaudio.transforms as T
 import plotly.graph_objects as go
 import numpy as np
 
-N_MELS = 128
+N_MELS = 96
 MEL_N_FFT = 4096
-FIXED_SPECT_LENGTH = 1024
-HOP_LENGTH = 4096
+FIXED_SPECT_LENGTH = 4096+2048+1024
+HOP_LENGTH = 4096//16
 
 DTYPE = torch.float32
 
@@ -41,10 +41,11 @@ def mel_frequencies(n_mels, sample_rate):
     mel_freqs = 700 * (10 ** (mel_freqs / 2595) - 1)
     return mel_freqs
 
+import plotly.subplots as subplots
 def plot_spectrogram(input_spectrogram, output_spectrogram):
     input_spectrogram = input_spectrogram.to(torch.float32)
     output_spectrogram = output_spectrogram.to(torch.float32)
-    
+
     # Pad the shorter spectrogram to match the length of the longer one
     if input_spectrogram.size(-1) < output_spectrogram.size(-1):
         pad_length = output_spectrogram.size(-1) - input_spectrogram.size(-1)
@@ -52,13 +53,14 @@ def plot_spectrogram(input_spectrogram, output_spectrogram):
     elif output_spectrogram.size(-1) < input_spectrogram.size(-1):
         pad_length = input_spectrogram.size(-1) - output_spectrogram.size(-1)
         output_spectrogram = F.pad(output_spectrogram, (0, pad_length), mode='constant', value=0)
-    
+
     diff_spectrogram = output_spectrogram - input_spectrogram
 
     # Compute the mel frequencies
     mel_freqs = mel_frequencies(N_MELS, sample_rate)
 
-    fig = go.Figure()
+    # Create subplots
+    fig = subplots.make_subplots(rows=3, cols=1, vertical_spacing=0.1, subplot_titles=('Input Spectrogram', 'Output Spectrogram', 'Difference Spectrogram'))
 
     # Input spectrogram
     fig.add_trace(go.Heatmap(
@@ -67,8 +69,8 @@ def plot_spectrogram(input_spectrogram, output_spectrogram):
         y=mel_freqs,  # Use mel frequencies for y-axis
         zmin=input_spectrogram.min().item(),
         zmax=input_spectrogram.max().item(),
-        name='Input Spectrogram'
-    ))
+        colorbar=dict(title='Amplitude (dB)'),
+    ), row=1, col=1)
 
     # Output spectrogram
     fig.add_trace(go.Heatmap(
@@ -77,8 +79,8 @@ def plot_spectrogram(input_spectrogram, output_spectrogram):
         y=mel_freqs,  # Use mel frequencies for y-axis
         zmin=output_spectrogram.min().item(),
         zmax=output_spectrogram.max().item(),
-        name='Output Spectrogram'
-    ))
+        colorbar=dict(title='Amplitude (dB)'),
+    ), row=2, col=1)
 
     # Difference spectrogram
     fig.add_trace(go.Heatmap(
@@ -87,14 +89,16 @@ def plot_spectrogram(input_spectrogram, output_spectrogram):
         y=mel_freqs,  # Use mel frequencies for y-axis
         zmin=diff_spectrogram.min().item(),
         zmax=diff_spectrogram.max().item(),
-        name='Difference Spectrogram'
-    ))
+        colorbar=dict(title='Amplitude Difference (dB)'),
+    ), row=3, col=1)
 
     fig.update_layout(
         title='Mel Spectrograms',
         xaxis_title='Time chunks of length ' + str(MEL_N_FFT),
         yaxis_title='Mel Frequency (Hz)',
-        height=900
+        height=1200,
+        width=2400,
+        coloraxis_colorbar_y=0.2,  # Move colorbars to the right side
     )
 
     fig.show()
@@ -217,7 +221,7 @@ class Decoder(nn.Module):
         # Incorporate the residual connection
         residual = F.interpolate(residual, size=x.shape[2:], mode='bilinear', align_corners=False)
         residual_weight = torch.sigmoid(self.residual_conv(x))
-        x = residual_weight * residual * x
+        x = residual_weight * residual / x
         
         return x
 
@@ -255,7 +259,7 @@ def train(model, dataloader, optimizer, scheduler=None):
                 reconstructed_spectrograms, mu, log_var = model(noisy_spectrograms)
                 reconstruction_loss = F.l1_loss(reconstructed_spectrograms, clean_spectrograms)
                 kl_divergence = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
-                beta = 0.25  # Beta-VAE loss coefficient
+                beta = 0.1  # Beta-VAE loss coefficient
                 loss = reconstruction_loss + beta * kl_divergence  # Combine losses with weighting factor
 
             loss.backward()
@@ -306,7 +310,7 @@ def collate_fn(batch):
     return stacked_noisy_spectrograms.unsqueeze(1), stacked_clean_spectrograms.unsqueeze(1), sample_rates[0]
 
 # Load and preprocess data
-def load_data(data_path, noise_ratio=0.9):
+def load_data(data_path, noise_ratio=0.6):
     spectrograms = []
     for root, dirs, files in os.walk(data_path):
         for file in files:
@@ -336,11 +340,11 @@ def spectrogram_to_waveform(spectrogram, sample_rate):
             self.fb = self.fb.to(melspec.device)  # Move the Mel filterbank to the same device as the input
             return super().forward(melspec)
 
-    inverse_mel_scale = InverseMelScale(sample_rate=sample_rate, n_stft=MEL_N_FFT, n_mels=N_MELS)
+    inverse_mel_scale = InverseMelScale(sample_rate=sample_rate, n_stft=MEL_N_FFT // 2 + 1, n_mels=N_MELS)
     spectrogram = inverse_mel_scale(spectrogram)
 
     spectrogram = spectrogram.cpu()  # Move the spectrogram to the CPU before applying GriffinLim
-    griffinlim = T.GriffinLim(n_fft=MEL_N_FFT*2-1, hop_length=HOP_LENGTH, win_length=None, power=1)  # Create a GriffinLim object
+    griffinlim = T.GriffinLim(n_fft=MEL_N_FFT*2-1, hop_length=HOP_LENGTH, win_length=None, power=1, n_iter=100)  # Create a GriffinLim object
 
     waveform = griffinlim(spectrogram.squeeze())  # Convert spectrogram back to audio
     waveform = waveform.unsqueeze(0)  # Add channel dimension
@@ -351,9 +355,9 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 1500
+    num_epochs = 120
     batch_size = 4096
-    learning_rate = 5e-4
+    learning_rate = 4e-4
     latent_dim = 4096
     hidden_channels = 6
 
