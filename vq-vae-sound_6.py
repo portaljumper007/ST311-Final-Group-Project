@@ -221,7 +221,7 @@ class Decoder(nn.Module):
         # Incorporate the residual connection
         residual = F.interpolate(residual, size=x.shape[2:], mode='bilinear', align_corners=False)
         residual_weight = torch.sigmoid(self.residual_conv(x))
-        x = residual_weight * residual / x
+        x = ((residual * residual_weight) * x) * 0.4 + x * 0.6
         
         return x
 
@@ -313,7 +313,7 @@ def collate_fn(batch):
 def load_data(data_path, noise_ratio=0.6):
     spectrograms = []
     for root, dirs, files in os.walk(data_path):
-        for file in files:
+        for file in files[:3]:
             if file.endswith(".wav") and "ID30_pd_2_1_1.wav" not in file:
                 print(file)
                 audio_path = os.path.join(root, file)
@@ -355,10 +355,10 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 4
+    num_epochs = 400
     batch_size = 4096
-    learning_rate = 3e-4
-    latent_dim = 4096
+    learning_rate = 2e-4
+    latent_dim = 2048
     hidden_channels = 6
 
     # Create VAE model
