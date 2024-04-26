@@ -9,7 +9,7 @@ import numpy as np
 
 N_MELS = 96
 MEL_N_FFT = 4096
-FIXED_SPECT_LENGTH = 4096+2048+1024
+FIXED_SPECT_LENGTH = 4096*2
 HOP_LENGTH = 4096//16
 
 DTYPE = torch.float32
@@ -313,7 +313,7 @@ def collate_fn(batch):
 def load_data(data_path, noise_ratio=0.6):
     spectrograms = []
     for root, dirs, files in os.walk(data_path):
-        for file in files[:3]:
+        for file in files[:10]:
             if file.endswith(".wav") and "ID30_pd_2_1_1.wav" not in file:
                 print(file)
                 audio_path = os.path.join(root, file)
@@ -330,10 +330,6 @@ def spectrogram_to_waveform(spectrogram, sample_rate):
     spectrogram = spectrogram.to(torch.float32)  # Cast back to float32
     spectrogram = torch.pow(10.0, spectrogram / 20.0)  # Convert the spectrogram from decibel scale back to amplitude
     spectrogram = (spectrogram - spectrogram.min()) / (spectrogram.max() - spectrogram.min())  # Normalize the spectrogram to the range [0, 1]
-
-    # Create a GriffinLim object with matching parameters
-    hop_length = HOP_LENGTH - 1
-    win_length = HOP_LENGTH - 1
 
     class InverseMelScale(T.InverseMelScale):  # Invert the Mel scale
         def forward(self, melspec):
@@ -355,10 +351,10 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 400
+    num_epochs = 900
     batch_size = 4096
     learning_rate = 2e-4
-    latent_dim = 2048
+    latent_dim = 4096
     hidden_channels = 6
 
     # Create VAE model
