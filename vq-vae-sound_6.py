@@ -344,7 +344,7 @@ def spectrogram_to_waveform(spectrogram, sample_rate):
     spectrogram = inverse_mel_scale(spectrogram)
 
     spectrogram = spectrogram.cpu()  # Move the spectrogram to the CPU before applying GriffinLim
-    griffinlim = T.GriffinLim(n_fft=MEL_N_FFT*2-1, hop_length=HOP_LENGTH, win_length=None, power=1, n_iter=100)  # Create a GriffinLim object
+    griffinlim = T.GriffinLim(n_fft=MEL_N_FFT, hop_length=HOP_LENGTH, win_length=None, power=1, n_iter=100)  # Create a GriffinLim object
 
     waveform = griffinlim(spectrogram.squeeze())  # Convert spectrogram back to audio
     waveform = waveform.unsqueeze(0)  # Add channel dimension
@@ -355,9 +355,9 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 120
+    num_epochs = 4
     batch_size = 4096
-    learning_rate = 4e-4
+    learning_rate = 3e-4
     latent_dim = 4096
     hidden_channels = 6
 
