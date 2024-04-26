@@ -8,9 +8,9 @@ import plotly.graph_objects as go
 import numpy as np
 
 N_MELS = 96
-MEL_N_FFT = 4096
+MEL_N_FFT = 4096*2
 FIXED_SPECT_LENGTH = 4096*2
-HOP_LENGTH = 4096//16
+HOP_LENGTH = 4096//18
 
 DTYPE = torch.float32
 
@@ -25,13 +25,14 @@ torch.set_default_dtype(DTYPE)
 def preprocess_audio(audio_path):
     waveform, sample_rate = torchaudio.load(audio_path, backend="soundfile")
     waveform = waveform.to(torch.float32)  # Cast waveform to float32
+    waveform_std = torch.std(waveform)
     torch.set_default_dtype(torch.float32)
     spectrogram = T.MelSpectrogram(sample_rate=sample_rate, n_mels=N_MELS, n_fft=MEL_N_FFT, hop_length=HOP_LENGTH)(waveform)
     spectrogram = T.AmplitudeToDB()(spectrogram)
     spectrogram = (spectrogram - spectrogram.mean()) / spectrogram.std()  # Normalize spectrogram
     spectrogram = spectrogram.to(DTYPE)
     torch.set_default_dtype(DTYPE)
-    return spectrogram.squeeze(0), sample_rate
+    return spectrogram.squeeze(0), sample_rate, waveform_std
 
 def mel_frequencies(n_mels, sample_rate):
     """Compute the Mel frequencies for a given number of Mel bins."""
@@ -103,7 +104,47 @@ def plot_spectrogram(input_spectrogram, output_spectrogram):
 
     fig.show()
 
+import gc
+import torch
 
+def plot_latent_space(model, spectrograms):
+    with torch.no_grad():
+        # Create a grid of points in the latent space
+        n_points = 20
+        z1_min, z1_max = -3, 3
+        z2_min, z2_max = -3, 3
+        z1 = np.linspace(z1_min, z1_max, n_points)
+        z2 = np.linspace(z2_min, z2_max, n_points)
+        Z1, Z2 = np.meshgrid(z1, z2)
+
+        # Reshape the grid to match the expected input shape of the decoder
+        latent_grid = np.stack((Z1, Z2), axis=-1).reshape((-1, 2))
+        latent_grid = np.pad(latent_grid, ((0, 0), (0, latent_dim - 2)), mode='constant')
+        latent_grid = torch.tensor(latent_grid, dtype=torch.float32).to(device)
+
+        reconstructed_spectrograms = model.decoder(latent_grid, torch.zeros_like(spectrograms[:1]).to(device)) # Decode the latent grid to get the reconstructed spectrograms
+
+        values = torch.std(reconstructed_spectrograms, dim=(1, 2, 3)).cpu().numpy() #Dimensionality reduce each output spectrogram using some method eg sum,std,max,mean
+
+        Z = values.reshape((n_points, n_points)) # Reshape the max values to match the grid shape
+
+        fig = go.Figure(data=[go.Surface(x=Z1, y=Z2, z=Z)])
+        fig.update_layout(
+            title='Latent Space Visualization',
+            template='none',
+            scene=dict(
+                xaxis_title='Latent Dimension 1',
+                yaxis_title='Latent Dimension 2',
+                zaxis_title='Max Spectrogram Value'
+            )
+        )
+        fig.show()
+
+        # Clear the cached tensors and release GPU memory
+        del reconstructed_spectrograms
+        del latent_grid
+        torch.cuda.empty_cache()
+        gc.collect()
 
 
 
@@ -127,15 +168,15 @@ class ResidualBlock(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, input_channels, hidden_channels, latent_dim):
         super(Encoder, self).__init__()
-        self.conv1 = nn.Conv2d(input_channels, hidden_channels, kernel_size=5, stride=2, padding=2)
+        self.conv1 = nn.Conv2d(input_channels, hidden_channels, kernel_size=5, stride=2, padding=2, groups=hidden_channels*1)
         self.res_block1 = ResidualBlock(hidden_channels)
         self.conv2 = nn.Conv2d(hidden_channels, hidden_channels*2, kernel_size=5, stride=2, padding=2, groups=hidden_channels*1)
         self.res_block2 = ResidualBlock(hidden_channels*2)
         self.conv3 = nn.Conv2d(hidden_channels*2, hidden_channels*4, kernel_size=5, stride=2, padding=2, groups=hidden_channels*2)
         self.res_block3 = ResidualBlock(hidden_channels*4)
-        self.conv4 = nn.Conv2d(hidden_channels*4, hidden_channels*8, kernel_size=5, stride=2, padding=2)
+        self.conv4 = nn.Conv2d(hidden_channels*4, hidden_channels*8, kernel_size=5, stride=2, padding=2, groups=hidden_channels*4)
         self.res_block4 = ResidualBlock(hidden_channels*8)
-        self.conv5 = nn.Conv2d(hidden_channels*8, hidden_channels*16, kernel_size=5, stride=2, padding=2)
+        self.conv5 = nn.Conv2d(hidden_channels*8, hidden_channels*16, kernel_size=5, stride=2, padding=2, groups=hidden_channels*8)
         self.res_block5 = ResidualBlock(hidden_channels*16)
         self.flat_dim = (N_MELS // 32) * (FIXED_SPECT_LENGTH // 32) * hidden_channels*16
         self.fc1 = nn.Linear(self.flat_dim, hidden_channels*32)
@@ -177,18 +218,19 @@ class Decoder(nn.Module):
         self.dropout2 = nn.Dropout(0.1)
         self.fc3 = nn.Linear(hidden_channels*32, (N_MELS // 32) * (FIXED_SPECT_LENGTH // 32) * hidden_channels*16)
         self.dropout3 = nn.Dropout(0.1)
-        self.deconv1 = nn.ConvTranspose2d(hidden_channels*16, hidden_channels*16, kernel_size=5, stride=2, padding=2, output_padding=1)
+        self.deconv1 = nn.ConvTranspose2d(hidden_channels*16, hidden_channels*16, kernel_size=5, stride=2, padding=2, output_padding=1, groups=hidden_channels*16)
         self.res_block1 = ResidualBlock(hidden_channels*16)
         self.pointwise_deconv1 = nn.ConvTranspose2d(hidden_channels*16, hidden_channels*8, kernel_size=1)
-        self.deconv2 = nn.ConvTranspose2d(hidden_channels*8, hidden_channels*8, kernel_size=5, stride=2, padding=2, output_padding=1)
+        self.deconv2 = nn.ConvTranspose2d(hidden_channels*8, hidden_channels*8, kernel_size=5, stride=2, padding=2, output_padding=1, groups=hidden_channels*8)
         self.res_block2 = ResidualBlock(hidden_channels*8)
+        self.pointwise_deconv2 = nn.ConvTranspose2d(hidden_channels*8, hidden_channels*8, kernel_size=1)
         self.deconv3 = nn.ConvTranspose2d(hidden_channels*8, hidden_channels*4, kernel_size=5, stride=2, padding=2, output_padding=1, groups=hidden_channels*4)
         self.res_block3 = ResidualBlock(hidden_channels*4)
         self.pointwise_deconv3 = nn.ConvTranspose2d(hidden_channels*4, hidden_channels*4, kernel_size=1)
         self.deconv4 = nn.ConvTranspose2d(hidden_channels*4, hidden_channels*2, kernel_size=5, stride=2, padding=2, output_padding=1, groups=hidden_channels*2)
         self.res_block4 = ResidualBlock(hidden_channels*2)
         self.pointwise_deconv4 = nn.ConvTranspose2d(hidden_channels*2, hidden_channels, kernel_size=1)
-        self.deconv5 = nn.ConvTranspose2d(hidden_channels, hidden_channels, kernel_size=5, stride=2, padding=2, output_padding=1)
+        self.deconv5 = nn.ConvTranspose2d(hidden_channels, hidden_channels, kernel_size=5, stride=2, padding=2, output_padding=1, groups=hidden_channels*1)
         self.res_block5 = ResidualBlock(hidden_channels)
         self.pointwise_deconv5 = nn.ConvTranspose2d(hidden_channels, output_channels, kernel_size=1)
         self.residual_conv = nn.Conv2d(output_channels, output_channels, kernel_size=1, groups=output_channels)
@@ -208,6 +250,7 @@ class Decoder(nn.Module):
         x = self.leaky_relu(self.pointwise_deconv1(x))
         x = self.leaky_relu(self.deconv2(x))
         x = self.res_block2(x)
+        x = self.leaky_relu(self.pointwise_deconv2(x))
         x = self.leaky_relu(self.deconv3(x))
         x = self.res_block3(x)
         x = self.leaky_relu(self.pointwise_deconv3(x))
@@ -221,7 +264,7 @@ class Decoder(nn.Module):
         # Incorporate the residual connection
         residual = F.interpolate(residual, size=x.shape[2:], mode='bilinear', align_corners=False)
         residual_weight = torch.sigmoid(self.residual_conv(x))
-        x = ((residual * residual_weight) * x) * 0.4 + x * 0.6
+        x = ((residual * residual_weight) * x) * 0.5 + x * 0.5
         
         return x
 
@@ -250,7 +293,7 @@ def train(model, dataloader, optimizer, scheduler=None):
         nn.init.kaiming_normal_(conv_layer.weight, mode='fan_in', nonlinearity='leaky_relu')
     for epoch in range(num_epochs):
         epoch_loss = 0
-        for i, (noisy_spectrograms, clean_spectrograms, _) in enumerate(dataloader):
+        for i, (noisy_spectrograms, clean_spectrograms, _) in enumerate(dataloader): #_ here is sample rate, which we know is the same for all files
             noisy_spectrograms = noisy_spectrograms.to(device).to(DTYPE)  # Convert input to float16
             clean_spectrograms = clean_spectrograms.to(device).to(DTYPE)  # Convert input to float16
 
@@ -291,7 +334,7 @@ def inference(model, spectrogram):
 
 # Custom collate function
 def collate_fn(batch):
-    noisy_spectrograms, clean_spectrograms, sample_rates = zip(*batch)
+    noisy_spectrograms, clean_spectrograms, sample_rates, waveform_stds = zip(*batch)
     
     # Pad the spectrograms to a fixed size
     padded_noisy_batch = []
@@ -313,20 +356,21 @@ def collate_fn(batch):
 def load_data(data_path, noise_ratio=0.6):
     spectrograms = []
     for root, dirs, files in os.walk(data_path):
-        for file in files[:10]:
+        for file in files[:2]:
             if file.endswith(".wav") and "ID30_pd_2_1_1.wav" not in file:
                 print(file)
                 audio_path = os.path.join(root, file)
-                spectrogram, sample_rate = preprocess_audio(audio_path)
+                spectrogram, sample_rate, waveform_std = preprocess_audio(audio_path)
                 
                 # Add noise to the spectrogram
                 noise = torch.randn_like(spectrogram) * noise_ratio * torch.var(spectrogram)
                 noisy_spectrogram = spectrogram + noise
                 
-                spectrograms.append((noisy_spectrogram, spectrogram, sample_rate))
+                spectrograms.append((noisy_spectrogram, spectrogram, sample_rate, waveform_std))
     return spectrograms
 
 def spectrogram_to_waveform(spectrogram, sample_rate):
+    print("Converting spectrogram back to a waveform...")
     spectrogram = spectrogram.to(torch.float32)  # Cast back to float32
     spectrogram = torch.pow(10.0, spectrogram / 20.0)  # Convert the spectrogram from decibel scale back to amplitude
     spectrogram = (spectrogram - spectrogram.min()) / (spectrogram.max() - spectrogram.min())  # Normalize the spectrogram to the range [0, 1]
@@ -340,7 +384,7 @@ def spectrogram_to_waveform(spectrogram, sample_rate):
     spectrogram = inverse_mel_scale(spectrogram)
 
     spectrogram = spectrogram.cpu()  # Move the spectrogram to the CPU before applying GriffinLim
-    griffinlim = T.GriffinLim(n_fft=MEL_N_FFT, hop_length=HOP_LENGTH, win_length=None, power=1, n_iter=100)  # Create a GriffinLim object
+    griffinlim = T.GriffinLim(n_fft=MEL_N_FFT, hop_length=HOP_LENGTH, win_length=None, power=1, n_iter=50)  # Create a GriffinLim object
 
     waveform = griffinlim(spectrogram.squeeze())  # Convert spectrogram back to audio
     waveform = waveform.unsqueeze(0)  # Add channel dimension
@@ -351,11 +395,11 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 900
+    num_epochs = 200
     batch_size = 4096
-    learning_rate = 2e-4
-    latent_dim = 4096
-    hidden_channels = 6
+    learning_rate = 2.5e-4
+    latent_dim = 1024
+    hidden_channels = 8
 
     # Create VAE model
     input_channels = 1
@@ -369,7 +413,8 @@ if __name__ == "__main__":
     # Plot an example spectrogram
     #_, example_spectrogram, _ = spectrograms[0]
     #plot_spectrogram(example_spectrogram.cpu())
-    input_spectrogram, sample_rate = preprocess_audio("26_29_09_2017_KCL\\26-29_09_2017_KCL\\ReadText\\PD\\ID30_pd_2_1_1.wav")
+    input_spectrogram, sample_rate, waveform_std = preprocess_audio("26_29_09_2017_KCL\\26-29_09_2017_KCL\\ReadText\\PD\\ID30_pd_2_1_1.wav")
+    print("Input volume (std of waveform):", waveform_std)
 
     dataloader = torch.utils.data.DataLoader(spectrograms, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True if torch.cuda.is_available() else False)
 
@@ -378,11 +423,23 @@ if __name__ == "__main__":
     #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, verbose=True)
     train(model, dataloader, optimizer)#, scheduler)
 
+
+
+    # Plot the latent space
+    batch = next(iter(dataloader))
+    input_spectrograms = batch[0].to(device)
+    plot_latent_space(model, input_spectrograms)
+
+
+
     # Perform inference
     output_spectrogram = inference(model, input_spectrogram)
     plot_spectrogram(input_spectrogram.cpu(), output_spectrogram.cpu()) # Plot the input, output, and difference spectrograms
 
     output_waveform = spectrogram_to_waveform(output_spectrogram, sample_rate)
+    print("DONE... saving...")
+    print("Output volume (std of waveform) BEFORE rescaling:", output_waveform.std())
+    output_waveform *= waveform_std / output_waveform.std()  # Rescale the output waveform to match the input volume
     torchaudio.save("output_audio.wav", output_waveform, sample_rate)
 
     input_waveform = spectrogram_to_waveform(input_spectrogram, sample_rate)
