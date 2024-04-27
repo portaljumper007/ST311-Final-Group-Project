@@ -8,9 +8,9 @@ import plotly.graph_objects as go
 import numpy as np
 
 N_MELS = 96
-MEL_N_FFT = 4096*2
-FIXED_SPECT_LENGTH = 4096*2
-HOP_LENGTH = 4096//18
+MEL_N_FFT = 4096*3
+FIXED_SPECT_LENGTH = 4096*5 #Reducing the number of timesteps linearly reduces RAM usage but also means the model trains on spectrograms with more cropping.
+HOP_LENGTH = 4096//20
 
 DTYPE = torch.float32
 
@@ -29,10 +29,12 @@ def preprocess_audio(audio_path):
     torch.set_default_dtype(torch.float32)
     spectrogram = T.MelSpectrogram(sample_rate=sample_rate, n_mels=N_MELS, n_fft=MEL_N_FFT, hop_length=HOP_LENGTH)(waveform)
     spectrogram = T.AmplitudeToDB()(spectrogram)
+    spectrogram_mean = spectrogram.mean()
+    spectrogram_std = (spectrogram-spectrogram_mean).std()
     spectrogram = (spectrogram - spectrogram.mean()) / spectrogram.std()  # Normalize spectrogram
     spectrogram = spectrogram.to(DTYPE)
     torch.set_default_dtype(DTYPE)
-    return spectrogram.squeeze(0), sample_rate, waveform_std
+    return spectrogram.squeeze(0), sample_rate, waveform_std, spectrogram_mean, spectrogram_std
 
 def mel_frequencies(n_mels, sample_rate):
     """Compute the Mel frequencies for a given number of Mel bins."""
@@ -302,7 +304,7 @@ def train(model, dataloader, optimizer, scheduler=None):
                 reconstructed_spectrograms, mu, log_var = model(noisy_spectrograms)
                 reconstruction_loss = F.l1_loss(reconstructed_spectrograms, clean_spectrograms)
                 kl_divergence = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
-                beta = 0.1  # Beta-VAE loss coefficient
+                beta = 0.15  # Beta-VAE loss coefficient #lower values lets it 'overfit' more and regularise the latent space less. higher values makes our latent space graph look more 'noisy' as a result.
                 loss = reconstruction_loss + beta * kl_divergence  # Combine losses with weighting factor
 
             loss.backward()
@@ -334,7 +336,7 @@ def inference(model, spectrogram):
 
 # Custom collate function
 def collate_fn(batch):
-    noisy_spectrograms, clean_spectrograms, sample_rates, waveform_stds = zip(*batch)
+    noisy_spectrograms, clean_spectrograms, sample_rates, waveform_stds, spectrogram_means, spectrogram_stds = zip(*batch)
     
     # Pad the spectrograms to a fixed size
     padded_noisy_batch = []
@@ -353,20 +355,20 @@ def collate_fn(batch):
     return stacked_noisy_spectrograms.unsqueeze(1), stacked_clean_spectrograms.unsqueeze(1), sample_rates[0]
 
 # Load and preprocess data
-def load_data(data_path, noise_ratio=0.6):
+def load_data(data_path, noise_ratio=0.4):
     spectrograms = []
     for root, dirs, files in os.walk(data_path):
-        for file in files[:8]:
+        for file in files[:3]:
             if file.endswith(".wav") and "ID30_pd_2_1_1.wav" not in file:
                 print(file)
                 audio_path = os.path.join(root, file)
-                spectrogram, sample_rate, waveform_std = preprocess_audio(audio_path)
+                spectrogram, sample_rate, waveform_std, spectrogram_mean, spectrogram_std = preprocess_audio(audio_path)
                 
                 # Add noise to the spectrogram
                 noise = torch.randn_like(spectrogram) * noise_ratio * torch.var(spectrogram)
-                noisy_spectrogram = spectrogram + noise
+                noisy_spectrogram = (spectrogram * noise) + spectrogram * (1-noise_ratio)
                 
-                spectrograms.append((noisy_spectrogram, spectrogram, sample_rate, waveform_std))
+                spectrograms.append((noisy_spectrogram, spectrogram, sample_rate, waveform_std, spectrogram_mean, spectrogram_std))
     return spectrograms
 
 def spectrogram_to_waveform(spectrogram, sample_rate):
@@ -384,7 +386,7 @@ def spectrogram_to_waveform(spectrogram, sample_rate):
     spectrogram = inverse_mel_scale(spectrogram)
 
     spectrogram = spectrogram.cpu()  # Move the spectrogram to the CPU before applying GriffinLim
-    griffinlim = T.GriffinLim(n_fft=MEL_N_FFT, hop_length=HOP_LENGTH, win_length=None, power=1, n_iter=50)  # Create a GriffinLim object
+    griffinlim = T.GriffinLim(n_fft=MEL_N_FFT, hop_length=HOP_LENGTH, win_length=None, power=1, n_iter=25)  # Create a GriffinLim object
 
     waveform = griffinlim(spectrogram.squeeze())  # Convert spectrogram back to audio
     waveform = waveform.unsqueeze(0)  # Add channel dimension
@@ -395,9 +397,9 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 500
+    num_epochs = 40
     batch_size = 4096
-    learning_rate = 2.5e-4
+    learning_rate = 5e-4
     latent_dim = 1024
     hidden_channels = 4
 
@@ -413,8 +415,9 @@ if __name__ == "__main__":
     # Plot an example spectrogram
     #_, example_spectrogram, _ = spectrograms[0]
     #plot_spectrogram(example_spectrogram.cpu())
-    input_spectrogram, sample_rate, waveform_std = preprocess_audio("26_29_09_2017_KCL\\26-29_09_2017_KCL\\ReadText\\PD\\ID30_pd_2_1_1.wav")
+    input_spectrogram, sample_rate, waveform_std, spectrogram_mean, spectrogram_std = preprocess_audio("26_29_09_2017_KCL\\26-29_09_2017_KCL\\ReadText\\PD\\ID30_pd_2_1_1.wav")
     print("Input volume (std of waveform):", waveform_std)
+    print("Input spectrogram mean:", spectrogram_mean, "Input spectrogram std:", spectrogram_std)
 
     dataloader = torch.utils.data.DataLoader(spectrograms, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True if torch.cuda.is_available() else False)
 
@@ -433,16 +436,25 @@ if __name__ == "__main__":
 
 
     # Perform inference
+    print("Inference..")
     output_spectrogram = inference(model, input_spectrogram)
+
+    #output_spectrogram += spectrogram_mean
+    output_spectrogram = (output_spectrogram - output_spectrogram.mean()) / output_spectrogram.std()
+    output_spectrogram *= spectrogram_std
+    output_spectrogram += spectrogram_mean
     plot_spectrogram(input_spectrogram.cpu(), output_spectrogram.cpu()) # Plot the input, output, and difference spectrograms
 
     output_waveform = spectrogram_to_waveform(output_spectrogram, sample_rate)
-    print("DONE... saving...")
+    print("Saving...")
     print("Output volume (std of waveform) BEFORE rescaling:", output_waveform.std())
-    output_waveform *= waveform_std / output_waveform.std()  # Rescale the output waveform to match the input volume
-    torchaudio.save("output_audio.wav", output_waveform, sample_rate)
+    # Rescale the output waveform to match the input volume
+    torchaudio.save("output_audio.wav", output_waveform * (waveform_std / output_waveform.std()), sample_rate)
 
-    #input_waveform = spectrogram_to_waveform(input_spectrogram, sample_rate)
+    input_waveform = spectrogram_to_waveform(input_spectrogram, sample_rate)
+    input_waveform = input_waveform[:, :output_waveform.size(-1)] # Crop the input waveform to match the length of the output waveform
+    diff_waveform = ((output_waveform/output_waveform.std())-(input_waveform/input_waveform.std()))
+    torchaudio.save("output_audio_DIFF.wav", diff_waveform / diff_waveform.std(), sample_rate)
     #torchaudio.save("test_unaltered_input_pipeline_audio.wav", input_waveform, sample_rate)
 
     print("Done! File saved.")
