@@ -358,7 +358,7 @@ def collate_fn(batch):
 def load_data(data_path, noise_ratio=0.4):
     spectrograms = []
     for root, dirs, files in os.walk(data_path):
-        for file in files[:3]:
+        for file in files[:4]:
             if file.endswith(".wav") and "ID30_pd_2_1_1.wav" not in file:
                 print(file)
                 audio_path = os.path.join(root, file)
@@ -397,7 +397,7 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 40
+    num_epochs = 400
     batch_size = 4096
     learning_rate = 5e-4
     latent_dim = 1024
@@ -453,7 +453,7 @@ if __name__ == "__main__":
 
     input_waveform = spectrogram_to_waveform(input_spectrogram, sample_rate)
     input_waveform = input_waveform[:, :output_waveform.size(-1)] # Crop the input waveform to match the length of the output waveform
-    diff_waveform = ((output_waveform/output_waveform.std())-(input_waveform/input_waveform.std()))
+    diff_waveform = ((input_waveform/input_waveform.std()) - (output_waveform/output_waveform.std()))
     torchaudio.save("output_audio_DIFF.wav", diff_waveform / diff_waveform.std(), sample_rate)
     #torchaudio.save("test_unaltered_input_pipeline_audio.wav", input_waveform, sample_rate)
 
