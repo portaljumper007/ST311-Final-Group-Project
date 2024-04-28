@@ -458,7 +458,3 @@ if __name__ == "__main__":
     #torchaudio.save("test_unaltered_input_pipeline_audio.wav", input_waveform, sample_rate)
 
     print("Done! File saved.")
-
-
-#FIX SPECTROGRAM QUALITY PROBLEMS
-#FIX OUTPUT FILE LACK OF 'VOLUME NORM' SO ITS QUIET.
