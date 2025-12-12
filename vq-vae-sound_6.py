@@ -359,7 +359,7 @@ def load_data(data_path, noise_ratio=0.4):
     spectrograms = []
     for root, dirs, files in os.walk(data_path):
         for file in files[:4]:
-            if file.endswith(".wav") and "ID30_pd_2_1_1.wav" not in file:
+            if file.endswith(".wav") and "ID32_pd_3_1_1.wav" not in file:
                 print(file)
                 audio_path = os.path.join(root, file)
                 spectrogram, sample_rate, waveform_std, spectrogram_mean, spectrogram_std = preprocess_audio(audio_path)
@@ -397,7 +397,7 @@ if __name__ == "__main__":
     print("Starting...")
 
     # Hyperparameters
-    num_epochs = 400
+    num_epochs = 40
     batch_size = 4096
     learning_rate = 5e-4
     latent_dim = 1024
@@ -415,7 +415,7 @@ if __name__ == "__main__":
     # Plot an example spectrogram
     #_, example_spectrogram, _ = spectrograms[0]
     #plot_spectrogram(example_spectrogram.cpu())
-    input_spectrogram, sample_rate, waveform_std, spectrogram_mean, spectrogram_std = preprocess_audio("26_29_09_2017_KCL\\26-29_09_2017_KCL\\ReadText\\PD\\ID30_pd_2_1_1.wav")
+    input_spectrogram, sample_rate, waveform_std, spectrogram_mean, spectrogram_std = preprocess_audio("26_29_09_2017_KCL\\26-29_09_2017_KCL\\ReadText\\PD\\ID32_pd_3_1_1.wav")
     print("Input volume (std of waveform):", waveform_std)
     print("Input spectrogram mean:", spectrogram_mean, "Input spectrogram std:", spectrogram_std)
 
